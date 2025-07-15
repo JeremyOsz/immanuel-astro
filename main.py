@@ -20,8 +20,12 @@ API_KEY_HEADER = "X-API-Key"
 # Security scheme for API key
 security = HTTPBearer(auto_error=False)
 
+import sys
+
 async def verify_api_key(x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
     """Verify the API key from the X-API-Key header."""
+    print(f"[DEBUG] Received X-API-Key: '{x_api_key}'", file=sys.stderr)
+    print(f"[DEBUG] Expected API_KEY: '{API_KEY}'", file=sys.stderr)
     if not x_api_key:
         raise HTTPException(
             status_code=401, 
@@ -29,13 +33,15 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None, alias="X-API-Ke
         )
     
     if x_api_key != API_KEY:
+        print("[DEBUG] API key mismatch!", file=sys.stderr)
         raise HTTPException(
             status_code=403, 
             detail="Invalid API key."
         )
     
+    print("[DEBUG] API key matched!", file=sys.stderr)
     return x_api_key
-
+    
 # Set the objects to include all required points, including all 12 house cusps
 settings.objects = [
     chart.SUN, chart.MOON, chart.MERCURY, chart.VENUS, chart.MARS, chart.JUPITER, chart.SATURN,
