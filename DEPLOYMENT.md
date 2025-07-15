@@ -41,12 +41,19 @@ Make sure your repository contains:
 4. Connect your GitHub repository
 5. Render will automatically detect and use your `render.yaml` configuration
 
-### 3. Environment Variables (Optional)
+### 3. Environment Variables
 
-If you need to set environment variables:
+**Required for API Security:**
 1. Go to your service dashboard on Render
 2. Navigate to "Environment" tab
-3. Add any required environment variables
+3. Add the following environment variable:
+   - `API_KEY`: Your secret API key (e.g., "my-super-secret-key-2024")
+
+**Optional:**
+- `ENVIRONMENT`: Set to "production" for production deployments
+- `HOST`: Host to bind to (default: 0.0.0.0)
+
+**Important:** Never commit your actual API key to version control. Always use environment variables for sensitive data.
 
 ### 4. Verify Deployment
 
@@ -69,11 +76,49 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8001
 ```
 
+## API Authentication
+
+All API endpoints (except health check) require authentication using an API key.
+
+### Using the API
+
+Include your API key in the request headers:
+```bash
+curl -X POST "https://your-app-name.onrender.com/birth-chart" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-secret-api-key-here" \
+  -d '{
+    "date": "1990-01-01",
+    "time": "12:00:00",
+    "place": "New York, USA",
+    "latitude": 40.7128,
+    "longitude": -74.0060
+  }'
+```
+
+### JavaScript/Fetch Example
+```javascript
+const response = await fetch('https://your-app-name.onrender.com/birth-chart', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-API-Key': 'your-secret-api-key-here'
+  },
+  body: JSON.stringify({
+    date: '1990-01-01',
+    time: '12:00:00',
+    place: 'New York, USA',
+    latitude: 40.7128,
+    longitude: -74.0060
+  })
+});
+```
+
 ## API Endpoints
 
-- `GET /` - Health check
-- `POST /birth-chart` - Generate birth chart
-- `POST /transits` - Calculate transits
+- `GET /` - Health check (no authentication required)
+- `POST /birth-chart` - Generate birth chart (requires API key)
+- `POST /transits` - Calculate transits (requires API key)
 - `GET /docs` - Interactive API documentation
 - `GET /redoc` - Alternative API documentation
 

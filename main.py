@@ -1,12 +1,40 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from immanuel import charts
 from immanuel.classes.serialize import ToJSON
 import datetime
 import json
+import os
 from typing import Optional
 from immanuel.setup import settings
 from immanuel.const import chart
+
+# Import configuration
+from config import config
+
+# API Key configuration
+API_KEY = config.API_KEY
+API_KEY_HEADER = "X-API-Key"
+
+# Security scheme for API key
+security = HTTPBearer(auto_error=False)
+
+async def verify_api_key(x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
+    """Verify the API key from the X-API-Key header."""
+    if not x_api_key:
+        raise HTTPException(
+            status_code=401, 
+            detail="API key required. Please provide X-API-Key header."
+        )
+    
+    if x_api_key != API_KEY:
+        raise HTTPException(
+            status_code=403, 
+            detail="Invalid API key."
+        )
+    
+    return x_api_key
 
 # Set the objects to include all required points, including all 12 house cusps
 settings.objects = [
@@ -83,7 +111,7 @@ class TransitData(BaseModel):
     }
 
 @app.post("/birth-chart", summary="Generate a Birth Chart")
-async def generate_birth_chart(birth_data: BirthData):
+async def generate_birth_chart(birth_data: BirthData, api_key: str = Depends(verify_api_key)):
     """
     Generates a natal (birth) chart based on the provided date, time, and location.
     """
@@ -104,7 +132,7 @@ async def generate_birth_chart(birth_data: BirthData):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/transits", summary="Calculate Transits for a Given Date")
-async def get_transits(transit_data: TransitData):
+async def get_transits(transit_data: TransitData, api_key: str = Depends(verify_api_key)):
     """
     Calculates the transiting planets for a given date relative to a natal chart.
     """

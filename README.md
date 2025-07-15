@@ -9,9 +9,18 @@ A FastAPI application that generates birth charts and calculates transits using 
    pip install -r requirements.txt
    ```
 
-2. **Run the application:**
+2. **Set up environment variables:**
    ```bash
-   uvicorn main:app --reload
+   # Copy the example environment file
+   cp env.example .env
+   
+   # Edit .env and set your API key
+   # API_KEY=your-secret-api-key-here
+   ```
+
+3. **Run the application:**
+   ```bash
+   uvicorn main:app --reload --port 8001
    ```
 
    The `--reload` flag enables auto-reload during development.
@@ -19,21 +28,27 @@ A FastAPI application that generates birth charts and calculates transits using 
 ## Usage
 
 Once running, the API will be available at:
-- **API Documentation:** http://localhost:8000/docs
-- **Alternative Docs:** http://localhost:8000/redoc
-- **Base URL:** http://localhost:8000
+- **API Documentation:** http://localhost:8001/docs
+- **Alternative Docs:** http://localhost:8001/redoc
+- **Base URL:** http://localhost:8001
+- **Health Check:** http://localhost:8001/ (no authentication required)
 
 ### Endpoints
 
 - **POST /birth-chart** - Generate a natal birth chart
 - **POST /transits** - Calculate transits for a given date
 
+### API Authentication
+
+All endpoints (except health check) require an API key. Include it in the `X-API-Key` header:
+
 ### Example Usage
 
 #### Generate Birth Chart
 ```bash
-curl -X POST "http://localhost:8000/birth-chart" \
+curl -X POST "http://localhost:8001/birth-chart" \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: your-secret-api-key-here" \
   -d '{
     "date": "1990-01-01",
     "time": "12:00:00",
@@ -45,8 +60,9 @@ curl -X POST "http://localhost:8000/birth-chart" \
 
 #### Calculate Transits
 ```bash
-curl -X POST "http://localhost:8000/transits" \
+curl -X POST "http://localhost:8001/transits" \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: your-secret-api-key-here" \
   -d '{
     "natal_date": "1990-01-01",
     "natal_time": "12:00:00",
