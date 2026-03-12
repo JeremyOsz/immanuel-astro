@@ -37,6 +37,7 @@ Once running, the API will be available at:
 
 - **POST /birth-chart** - Generate a natal birth chart
 - **POST /transits** - Calculate transits for a given date
+- **POST /planet-sign-timeline** - Bulk planetary timeline (points, sign segments, ingresses, retrograde switches)
 
 ### API Authentication
 
@@ -69,6 +70,23 @@ curl -X POST "http://localhost:8001/transits" \
     "natal_latitude": 40.7128,
     "natal_longitude": -74.0060,
     "transit_date": "2024-01-01"
+  }'
+```
+
+#### Planet Sign Timeline (Bulk Ephemeris)
+```bash
+curl -X POST "http://localhost:8001/planet-sign-timeline" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-secret-api-key-here" \
+  -d '{
+    "start_date": "2025-03-12",
+    "end_date": "2026-03-12",
+    "planets": ["Jupiter", "Saturn"],
+    "latitude": 51.5074,
+    "longitude": -0.1278,
+    "time": "12:00:00",
+    "house_system": "whole_sign",
+    "step_days": 1
   }'
 ```
 
