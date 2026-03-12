@@ -50,6 +50,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+planet_sign_timeline_cache.sqlite3
 
 # Translations
 *.mo

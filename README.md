@@ -90,6 +90,15 @@ curl -X POST "http://localhost:8001/planet-sign-timeline" \
   }'
 ```
 
+This endpoint now uses a persistent SQLite cache (`planet_sign_timeline_cache.sqlite3` by default):
+- Stores daily planet rows keyed by `(latitude, longitude, time, house_system, date, planet)`
+- Backfills only missing dates for each request
+- Keeps serving repeated ranges from stored data
+- Runs a daily precompute loop for the default London/noon scope
+
+Optional environment variables:
+- `TIMELINE_DB_PATH` (default: `planet_sign_timeline_cache.sqlite3`)
+
 ## Development
 
 The application uses:
