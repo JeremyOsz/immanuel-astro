@@ -78,4 +78,22 @@ The application uses:
 - **FastAPI** for the web framework
 - **Pydantic** for data validation
 - **immanuel** for astrological calculations
-- **uvicorn** as the ASGI server 
+- **uvicorn** as the ASGI server
+
+## Deploy to Vercel (Serverless)
+
+This repo is now configured for Vercel serverless deployment:
+- `api/index.py` exports the FastAPI app for Vercel Functions
+- `vercel.json` routes all paths to that function
+
+### Steps
+
+1. Push this repo to GitHub.
+2. Import the repo in Vercel.
+3. Set environment variable `API_KEY` in Vercel project settings.
+4. Deploy.
+
+### Notes for Swiss Ephemeris C bindings
+
+- `immanuel` depends on `pyswisseph` (native extension). Vercel must be able to install a compatible Linux wheel during build.
+- If build/runtime fails for `pyswisseph`, keep the frontend on Vercel and run this API on a container/VM service such as Render.

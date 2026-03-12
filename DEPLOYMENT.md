@@ -1,4 +1,26 @@
-# Deployment Guide for Render
+# Deployment Guide
+
+## Option 1: Vercel (Serverless)
+
+This repository includes Vercel serverless wiring:
+- `api/index.py` exposes `main.app`
+- `vercel.json` routes all requests to `api/index.py`
+
+### Steps
+
+1. Push the repository to GitHub.
+2. Create a new Vercel project from the repository.
+3. Add environment variable:
+   - `API_KEY`: your secret API key
+4. Deploy.
+
+### Important constraint (Swiss Ephemeris native extension)
+
+This API uses `immanuel`, which depends on `pyswisseph` (C extension).
+- Vercel deployment succeeds only if a compatible Linux build/wheel is installed at build time.
+- If Vercel build fails on `pyswisseph`, use Option 2 (Render) for the API runtime.
+
+## Option 2: Render
 
 This guide will help you deploy your Astrology API to Render.
 
