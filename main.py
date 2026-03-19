@@ -372,8 +372,18 @@ class PlanetSignTimelineRequest(BaseModel):
     start_date: datetime.date = Field(...)
     end_date: datetime.date = Field(...)
     planets: List[str] = Field(..., min_length=1, description="Planet names, e.g. ['Jupiter', 'Saturn']")
-    latitude: float = Field(..., ge=-90, le=90, description="Ignored for general-sky mode; kept for backward compatibility")
-    longitude: float = Field(..., ge=-180, le=180, description="Ignored for general-sky mode; kept for backward compatibility")
+    latitude: float = Field(
+        default=0.0,
+        ge=-90,
+        le=90,
+        description="Ignored for general-sky mode; optional for backward compatibility",
+    )
+    longitude: float = Field(
+        default=0.0,
+        ge=-180,
+        le=180,
+        description="Ignored for general-sky mode; optional for backward compatibility",
+    )
     time: datetime.time = Field(
         default=datetime.time(hour=12, minute=0, second=0),
         description="Ignored for general-sky mode; kept for backward compatibility",

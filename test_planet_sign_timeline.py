@@ -64,6 +64,42 @@ def test_planet_sign_timeline_rejects_inverted_date_range():
         assert "end_date must be on or after start_date" in str(exc)
 
 
+def test_planet_sign_timeline_allows_missing_lat_lon_for_general_sky():
+    body = _request_payload()
+    body.pop("latitude")
+    body.pop("longitude")
+
+    payload = main.PlanetSignTimelineRequest(**body)
+
+    assert payload.latitude == 0.0
+    assert payload.longitude == 0.0
+
+
+def test_planet_sign_timeline_defaults_single_missing_coordinate():
+    body = _request_payload()
+    body.pop("latitude")
+    payload = main.PlanetSignTimelineRequest(**body)
+    assert payload.latitude == 0.0
+    assert payload.longitude == -0.1278
+
+    body = _request_payload()
+    body.pop("longitude")
+    payload = main.PlanetSignTimelineRequest(**body)
+    assert payload.latitude == 51.5074
+    assert payload.longitude == 0.0
+
+
+def test_planet_sign_timeline_still_rejects_out_of_range_coordinates():
+    body = _request_payload()
+    body["latitude"] = 120
+
+    try:
+        main.PlanetSignTimelineRequest(**body)
+        assert False, "Expected validation error for out-of-range latitude"
+    except Exception as exc:
+        assert "less than or equal to 90" in str(exc)
+
+
 def test_build_timeline_metadata_tracks_ingresses_and_retrograde_switches():
     points = [
         {

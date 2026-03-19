@@ -259,3 +259,4 @@ $RECYCLE.BIN/
 # Project specific
 api_response.json
 *.log
+.vercel
