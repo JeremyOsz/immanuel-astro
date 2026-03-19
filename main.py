@@ -50,10 +50,17 @@ REDIS_URL = os.getenv("REDIS_URL")
 TIMELINE_RESPONSE_CACHE_TTL_SECONDS = max(
     60, int(os.getenv("TIMELINE_RESPONSE_CACHE_TTL_SECONDS", str(60 * 60 * 24 * 30)))
 )
-TIMELINE_RESPONSE_CACHE_VERSION = os.getenv("TIMELINE_RESPONSE_CACHE_VERSION", "v1")
+TIMELINE_RESPONSE_CACHE_VERSION = os.getenv("TIMELINE_RESPONSE_CACHE_VERSION", "v2")
 TIMELINE_RESPONSE_CACHE_MAX_ITEMS = max(
     50, int(os.getenv("TIMELINE_RESPONSE_CACHE_MAX_ITEMS", "500"))
 )
+GENERAL_SKY_REFERENCE = {
+    "latitude": 0.0,
+    "longitude": 0.0,
+    "time": datetime.time(hour=12, minute=0, second=0),
+    "frame": "general-sky",
+}
+NON_GENERAL_SKY_POINTS = {"ASC", "MC", "Part Of Fortune", "Vertex"}
 DEFAULT_PRECOMPUTE_PLANETS = [
     "Sun",
     "Moon",
@@ -67,9 +74,9 @@ DEFAULT_PRECOMPUTE_PLANETS = [
     "Pluto",
 ]
 DEFAULT_PRECOMPUTE_SCOPE = {
-    "latitude": 51.5074,
-    "longitude": -0.1278,
-    "time": datetime.time(hour=12, minute=0, second=0),
+    "latitude": GENERAL_SKY_REFERENCE["latitude"],
+    "longitude": GENERAL_SKY_REFERENCE["longitude"],
+    "time": GENERAL_SKY_REFERENCE["time"],
     "house_system": "whole_sign",
 }
 _daily_precompute_task: Optional[asyncio.Task] = None
@@ -187,10 +194,10 @@ def init_timeline_storage() -> None:
 
 def build_timeline_scope_key(payload: "PlanetSignTimelineRequest") -> str:
     scope_payload = {
-        "latitude": normalize_coordinate(payload.latitude),
-        "longitude": normalize_coordinate(payload.longitude),
-        "time": payload.time.isoformat(),
-        "house_system": normalize_house_system_name(payload.house_system),
+        "frame": GENERAL_SKY_REFERENCE["frame"],
+        "latitude": GENERAL_SKY_REFERENCE["latitude"],
+        "longitude": GENERAL_SKY_REFERENCE["longitude"],
+        "time": GENERAL_SKY_REFERENCE["time"].isoformat(),
     }
     return json.dumps(scope_payload, sort_keys=True, separators=(",", ":"))
 
@@ -365,13 +372,13 @@ class PlanetSignTimelineRequest(BaseModel):
     start_date: datetime.date = Field(...)
     end_date: datetime.date = Field(...)
     planets: List[str] = Field(..., min_length=1, description="Planet names, e.g. ['Jupiter', 'Saturn']")
-    latitude: float = Field(..., ge=-90, le=90)
-    longitude: float = Field(..., ge=-180, le=180)
+    latitude: float = Field(..., ge=-90, le=90, description="Ignored for general-sky mode; kept for backward compatibility")
+    longitude: float = Field(..., ge=-180, le=180, description="Ignored for general-sky mode; kept for backward compatibility")
     time: datetime.time = Field(
         default=datetime.time(hour=12, minute=0, second=0),
-        description="Time in HH:MM:SS format",
+        description="Ignored for general-sky mode; kept for backward compatibility",
     )
-    house_system: Optional[str] = Field("whole_sign", description="House system to use: 'whole_sign' (default) or 'placidus'")
+    house_system: Optional[str] = Field("whole_sign", description="Ignored for general-sky mode; kept for backward compatibility")
     step_days: int = Field(1, ge=1, description="Sampling step in days")
 
     @field_validator("planets")
@@ -393,6 +400,13 @@ class PlanetSignTimelineRequest(BaseModel):
 
         if not normalized:
             raise ValueError("At least one valid planet is required")
+
+        invalid_points = [planet for planet in normalized if planet in NON_GENERAL_SKY_POINTS]
+        if invalid_points:
+            raise ValueError(
+                "General sky motion does not support chart points: "
+                + ", ".join(invalid_points)
+            )
 
         return normalized
 
@@ -618,13 +632,10 @@ def build_timeline_metadata(
 def build_timeline_cache_key(payload: PlanetSignTimelineRequest) -> str:
     cache_key_payload = {
         "version": TIMELINE_RESPONSE_CACHE_VERSION,
+        "frame": GENERAL_SKY_REFERENCE["frame"],
         "start_date": payload.start_date.isoformat(),
         "end_date": payload.end_date.isoformat(),
         "planets": payload.planets,
-        "latitude": normalize_coordinate(payload.latitude),
-        "longitude": normalize_coordinate(payload.longitude),
-        "time": payload.time.isoformat(),
-        "house_system": normalize_house_system_name(payload.house_system),
         "step_days": payload.step_days,
     }
     return json.dumps(cache_key_payload, sort_keys=True, separators=(",", ":"))
@@ -699,12 +710,12 @@ def compute_planet_positions_for_date(
     payload: PlanetSignTimelineRequest,
     sample_date: datetime.date,
 ) -> Dict[str, Dict[str, Any]]:
-    time_str = payload.time.strftime("%H:%M:%S")
+    time_str = GENERAL_SKY_REFERENCE["time"].strftime("%H:%M:%S")
     date_time = f"{sample_date.isoformat()} {time_str}"
     subject = charts.Subject(
         date_time=date_time,
-        latitude=payload.latitude,
-        longitude=payload.longitude,
+        latitude=GENERAL_SKY_REFERENCE["latitude"],
+        longitude=GENERAL_SKY_REFERENCE["longitude"],
     )
     timeline_chart = charts.Natal(subject)
     return extract_selected_planets_from_natal(timeline_chart, payload.planets)
@@ -729,14 +740,11 @@ async def compute_missing_timeline_dates(
 
     object_constants = resolve_timeline_object_constants(payload.planets)
     async with _house_system_lock:
-        previous_house_system = settings.house_system
         previous_objects = settings.objects
-        settings.house_system = resolve_house_system(payload.house_system)
         settings.objects = object_constants
         try:
             return await asyncio.to_thread(compute_missing_timeline_dates_sync, payload, missing_dates)
         finally:
-            settings.house_system = previous_house_system
             settings.objects = previous_objects
 
 
