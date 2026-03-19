@@ -90,14 +90,19 @@ curl -X POST "http://localhost:8001/planet-sign-timeline" \
   }'
 ```
 
-This endpoint now uses a persistent SQLite cache (`planet_sign_timeline_cache.sqlite3` by default):
-- Stores daily planet rows keyed by `(latitude, longitude, time, house_system, date, planet)`
-- Backfills only missing dates for each request
-- Keeps serving repeated ranges from stored data
-- Runs a daily precompute loop for the default London/noon scope
+This endpoint now uses layered caching optimized for long-range ephemeris queries:
+- Stores daily planet rows in SQLite keyed by `(latitude, longitude, time, house_system, date, planet)`
+- Uses response-level in-memory cache with TTL for hot repeated calls
+- Optionally uses shared Redis (`REDIS_URL`) for cross-instance cache hits in serverless
+- Backfills only missing dates for each request and persists them
+- Runs a daily precompute loop for the default London/noon scope (non-serverless runtimes)
 
 Optional environment variables:
 - `TIMELINE_DB_PATH` (default: `planet_sign_timeline_cache.sqlite3`)
+- `REDIS_URL` (recommended on Vercel)
+- `TIMELINE_RESPONSE_CACHE_TTL_SECONDS` (default: `2592000`)
+- `TIMELINE_RESPONSE_CACHE_VERSION` (default: `v1`)
+- `TIMELINE_RESPONSE_CACHE_MAX_ITEMS` (default: `500`)
 
 ## Development
 
@@ -118,9 +123,11 @@ This repo is now configured for Vercel serverless deployment:
 1. Push this repo to GitHub.
 2. Import the repo in Vercel.
 3. Set environment variable `API_KEY` in Vercel project settings.
-4. Deploy.
+4. (Recommended) Set `REDIS_URL` for shared aggressive caching across serverless instances.
+5. Deploy.
 
 ### Notes for Swiss Ephemeris C bindings
 
 - `immanuel` depends on `pyswisseph` (native extension). Vercel must be able to install a compatible Linux wheel during build.
 - If build/runtime fails for `pyswisseph`, keep the frontend on Vercel and run this API on a container/VM service such as Render.
+- Without `REDIS_URL`, timeline caching falls back to per-instance memory plus local SQLite (`/tmp` on Vercel), which is less effective across cold starts.

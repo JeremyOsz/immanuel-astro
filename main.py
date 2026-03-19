@@ -13,6 +13,10 @@ from immanuel import charts
 from immanuel.classes.serialize import ToJSON
 from immanuel.setup import settings
 from immanuel.const import chart
+try:
+    import redis
+except ImportError:  # pragma: no cover - optional dependency for production caching
+    redis = None
 
 # Import configuration
 from config import config
@@ -21,10 +25,35 @@ from config import config
 API_KEY = config.API_KEY
 _house_system_lock = asyncio.Lock()
 _planet_sign_timeline_cache_lock = asyncio.Lock()
-_planet_sign_timeline_cache: Dict[str, Dict[str, Any]] = {}
+_planet_sign_timeline_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _timeline_storage_lock = asyncio.Lock()
 
-TIMELINE_DB_PATH = os.getenv("TIMELINE_DB_PATH", "planet_sign_timeline_cache.sqlite3")
+
+def is_vercel_runtime() -> bool:
+    return os.getenv("VERCEL") == "1"
+
+
+def resolve_timeline_db_path() -> str:
+    configured_path = os.getenv("TIMELINE_DB_PATH")
+    if configured_path:
+        return configured_path
+
+    # Vercel's deployment filesystem is read-only. Use /tmp for writable storage.
+    if is_vercel_runtime():
+        return "/tmp/planet_sign_timeline_cache.sqlite3"
+
+    return "planet_sign_timeline_cache.sqlite3"
+
+
+TIMELINE_DB_PATH = resolve_timeline_db_path()
+REDIS_URL = os.getenv("REDIS_URL")
+TIMELINE_RESPONSE_CACHE_TTL_SECONDS = max(
+    60, int(os.getenv("TIMELINE_RESPONSE_CACHE_TTL_SECONDS", str(60 * 60 * 24 * 30)))
+)
+TIMELINE_RESPONSE_CACHE_VERSION = os.getenv("TIMELINE_RESPONSE_CACHE_VERSION", "v1")
+TIMELINE_RESPONSE_CACHE_MAX_ITEMS = max(
+    50, int(os.getenv("TIMELINE_RESPONSE_CACHE_MAX_ITEMS", "500"))
+)
 DEFAULT_PRECOMPUTE_PLANETS = [
     "Sun",
     "Moon",
@@ -44,6 +73,8 @@ DEFAULT_PRECOMPUTE_SCOPE = {
     "house_system": "whole_sign",
 }
 _daily_precompute_task: Optional[asyncio.Task] = None
+_redis_client = None
+_redis_available = redis is not None and bool(REDIS_URL)
 
 async def verify_api_key(x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
     """Verify the API key from the X-API-Key header."""
@@ -104,6 +135,31 @@ def resolve_house_system(house_system: Optional[str]) -> int:
     return house_system_map.get((house_system or "whole_sign").lower(), chart.WHOLE_SIGN)
 
 
+def normalize_house_system_name(house_system: Optional[str]) -> str:
+    cleaned = (house_system or "whole_sign").strip().lower()
+    return cleaned if cleaned in house_system_map else "whole_sign"
+
+
+def normalize_coordinate(value: float) -> float:
+    # 6dp is more than enough precision for cache-key identity and improves hit-rate.
+    return round(float(value), 6)
+
+
+def get_redis_client():
+    global _redis_client
+    if not _redis_available:
+        return None
+    if _redis_client is not None:
+        return _redis_client
+    _redis_client = redis.Redis.from_url(
+        REDIS_URL,
+        decode_responses=True,
+        socket_connect_timeout=2,
+        socket_timeout=2,
+    )
+    return _redis_client
+
+
 def init_timeline_storage() -> None:
     with sqlite3.connect(TIMELINE_DB_PATH) as conn:
         conn.execute(
@@ -131,10 +187,10 @@ def init_timeline_storage() -> None:
 
 def build_timeline_scope_key(payload: "PlanetSignTimelineRequest") -> str:
     scope_payload = {
-        "latitude": round(payload.latitude, 6),
-        "longitude": round(payload.longitude, 6),
+        "latitude": normalize_coordinate(payload.latitude),
+        "longitude": normalize_coordinate(payload.longitude),
         "time": payload.time.isoformat(),
-        "house_system": (payload.house_system or "whole_sign").lower(),
+        "house_system": normalize_house_system_name(payload.house_system),
     }
     return json.dumps(scope_payload, sort_keys=True, separators=(",", ":"))
 
@@ -230,12 +286,14 @@ def write_stored_timeline_points(
 async def app_lifespan(_: FastAPI):
     global _daily_precompute_task
     init_timeline_storage()
-    if _daily_precompute_task is None or _daily_precompute_task.done():
+    # Long-running background loops are not a good fit for serverless runtimes.
+    should_run_daily_task = not is_vercel_runtime()
+    if should_run_daily_task and (_daily_precompute_task is None or _daily_precompute_task.done()):
         _daily_precompute_task = asyncio.create_task(daily_precompute_loop())
     try:
         yield
     finally:
-        if _daily_precompute_task is not None:
+        if should_run_daily_task and _daily_precompute_task is not None:
             _daily_precompute_task.cancel()
             try:
                 await _daily_precompute_task
@@ -250,8 +308,6 @@ app = FastAPI(
     version="1.0.0",
     lifespan=app_lifespan,
 )
-
-init_timeline_storage()
 
 @app.get("/", summary="Health Check")
 async def health_check():
@@ -309,8 +365,8 @@ class PlanetSignTimelineRequest(BaseModel):
     start_date: datetime.date = Field(...)
     end_date: datetime.date = Field(...)
     planets: List[str] = Field(..., min_length=1, description="Planet names, e.g. ['Jupiter', 'Saturn']")
-    latitude: float = Field(...)
-    longitude: float = Field(...)
+    latitude: float = Field(..., ge=-90, le=90)
+    longitude: float = Field(..., ge=-180, le=180)
     time: datetime.time = Field(
         default=datetime.time(hour=12, minute=0, second=0),
         description="Time in HH:MM:SS format",
@@ -322,6 +378,7 @@ class PlanetSignTimelineRequest(BaseModel):
     @classmethod
     def normalize_planets(cls, planets: List[str]) -> List[str]:
         normalized: List[str] = []
+        seen = set()
         for planet in planets:
             cleaned = " ".join(planet.strip().split())
             if not cleaned:
@@ -330,7 +387,8 @@ class PlanetSignTimelineRequest(BaseModel):
                 canonical = cleaned.upper()
             else:
                 canonical = cleaned.title()
-            if canonical not in normalized:
+            if canonical not in seen:
+                seen.add(canonical)
                 normalized.append(canonical)
 
         if not normalized:
@@ -343,6 +401,14 @@ class PlanetSignTimelineRequest(BaseModel):
         if self.end_date < self.start_date:
             raise ValueError("end_date must be on or after start_date")
         return self
+
+    @field_validator("house_system")
+    @classmethod
+    def normalize_house_system(cls, house_system: Optional[str]) -> str:
+        raw = (house_system or "whole_sign").strip().lower()
+        if raw not in house_system_map:
+            raise ValueError("house_system must be one of: whole_sign, placidus")
+        return raw
 
     model_config = {
         "json_schema_extra": {
@@ -551,16 +617,82 @@ def build_timeline_metadata(
 
 def build_timeline_cache_key(payload: PlanetSignTimelineRequest) -> str:
     cache_key_payload = {
+        "version": TIMELINE_RESPONSE_CACHE_VERSION,
         "start_date": payload.start_date.isoformat(),
         "end_date": payload.end_date.isoformat(),
         "planets": payload.planets,
-        "latitude": payload.latitude,
-        "longitude": payload.longitude,
+        "latitude": normalize_coordinate(payload.latitude),
+        "longitude": normalize_coordinate(payload.longitude),
         "time": payload.time.isoformat(),
-        "house_system": (payload.house_system or "whole_sign").lower(),
+        "house_system": normalize_house_system_name(payload.house_system),
         "step_days": payload.step_days,
     }
     return json.dumps(cache_key_payload, sort_keys=True, separators=(",", ":"))
+
+
+def build_timeline_redis_key(cache_key: str) -> str:
+    return f"planet-sign-timeline:{cache_key}"
+
+
+async def read_timeline_response_from_memory(cache_key: str) -> Optional[Dict[str, Any]]:
+    now_ts = datetime.datetime.now(datetime.timezone.utc).timestamp()
+    async with _planet_sign_timeline_cache_lock:
+        cached_entry = _planet_sign_timeline_cache.get(cache_key)
+        if cached_entry is None:
+            return None
+        expires_at_ts, payload = cached_entry
+        if now_ts >= expires_at_ts:
+            _planet_sign_timeline_cache.pop(cache_key, None)
+            return None
+        return copy.deepcopy(payload)
+
+
+async def write_timeline_response_to_memory(cache_key: str, payload: Dict[str, Any]) -> None:
+    expires_at_ts = datetime.datetime.now(datetime.timezone.utc).timestamp() + TIMELINE_RESPONSE_CACHE_TTL_SECONDS
+    async with _planet_sign_timeline_cache_lock:
+        if len(_planet_sign_timeline_cache) >= TIMELINE_RESPONSE_CACHE_MAX_ITEMS:
+            oldest_key = min(_planet_sign_timeline_cache.items(), key=lambda item: item[1][0])[0]
+            _planet_sign_timeline_cache.pop(oldest_key, None)
+        _planet_sign_timeline_cache[cache_key] = (expires_at_ts, copy.deepcopy(payload))
+
+
+def read_timeline_response_from_redis_sync(cache_key: str) -> Optional[Dict[str, Any]]:
+    client = get_redis_client()
+    if client is None:
+        return None
+    raw = client.get(build_timeline_redis_key(cache_key))
+    if not raw:
+        return None
+    return json.loads(raw)
+
+
+def write_timeline_response_to_redis_sync(cache_key: str, payload: Dict[str, Any]) -> None:
+    client = get_redis_client()
+    if client is None:
+        return
+    client.setex(
+        build_timeline_redis_key(cache_key),
+        TIMELINE_RESPONSE_CACHE_TTL_SECONDS,
+        json.dumps(payload, separators=(",", ":")),
+    )
+
+
+async def read_timeline_response_from_redis(cache_key: str) -> Optional[Dict[str, Any]]:
+    if not _redis_available:
+        return None
+    try:
+        return await asyncio.to_thread(read_timeline_response_from_redis_sync, cache_key)
+    except Exception:
+        return None
+
+
+async def write_timeline_response_to_redis(cache_key: str, payload: Dict[str, Any]) -> None:
+    if not _redis_available:
+        return
+    try:
+        await asyncio.to_thread(write_timeline_response_to_redis_sync, cache_key, payload)
+    except Exception:
+        return
 
 
 def compute_planet_positions_for_date(
@@ -752,9 +884,13 @@ async def get_planet_sign_timeline(
     returns sign segments, ingress points, and retrograde direction changes.
     """
     cache_key = build_timeline_cache_key(timeline_data)
-    async with _planet_sign_timeline_cache_lock:
-        cached = _planet_sign_timeline_cache.get(cache_key)
+    cached = await read_timeline_response_from_memory(cache_key)
     if cached is not None:
+        return cached
+
+    cached = await read_timeline_response_from_redis(cache_key)
+    if cached is not None:
+        await write_timeline_response_to_memory(cache_key, cached)
         return copy.deepcopy(cached)
 
     try:
@@ -764,8 +900,8 @@ async def get_planet_sign_timeline(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    async with _planet_sign_timeline_cache_lock:
-        _planet_sign_timeline_cache[cache_key] = copy.deepcopy(timeline_response)
+    await write_timeline_response_to_memory(cache_key, timeline_response)
+    await write_timeline_response_to_redis(cache_key, timeline_response)
     return timeline_response
 
 # To run this application locally:
